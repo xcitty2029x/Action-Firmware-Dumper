@@ -1,0 +1,112 @@
+name: Firmware Dump
+
+on:
+  workflow_dispatch:
+    inputs:
+      FIRMWARE_LINK:
+        description: 'Firmware Link'
+        required: true
+        default: ''
+
+jobs:
+  build:
+    name: Dump by ${{ github.actor }}
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
+      
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+        
+    - name: Setup Dump Environment
+      run: |
+        mkdir -p workspace && cd workspace
+        git clone --depth=1 https://github.com/DumprX/DumprX.git ./dumprx
+        cd dumprx && bash setup.sh
+        
+    - name: Doing Sudo Modeprobe
+        run: |
+          sudo apt update
+          DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
+            attr ccache clang ffmpeg golang \
+            libbrotli-dev libgtest-dev libprotobuf-dev libunwind-dev libpcre2-dev \
+            libzstd-dev linux-modules-extra-$(uname -r) lld protobuf-compiler webp
+          sudo modprobe erofs f2fs
+           
+    - name: Dump Firmware
+      run: |
+        cd workspace/dumprx
+        bash dumper.sh ${{ github.event.inputs.FIRMWARE_LINK }}
+        cd out
+        echo "MANUFACTURER_NAME=$(grep "ro.product.vendor.manufacturer" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+
+    - name: Set Variables - if oplus
+      if: env.MANUFACTURER_NAME == 'oplus'
+      run: |
+        cd workspace/dumprx/out
+        rm -rf .git
+        if [ -d odm ]; then
+           echo "ODM directory exist..."
+        else
+           echo "Making fake ODM directory..."
+           mkdir -p odm && cd odm
+           echo "ro.vendor.oplus.market.name=ossi-${{ github.run_id }}" > build.prop
+           cd ..
+        fi
+        echo "VENDOR_NAME=$(grep "ro.vendor.oplus.market.name" odm/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+        echo "BRANCH=$(grep "ro.vendor.build.id" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+
+    - name: Set Variables - if others
+      if: env.MANUFACTURER_NAME != 'oplus'
+      run: |
+        cd workspace/dumprx/out
+        rm -rf .git
+        echo "VENDOR_NAME=$(grep "ro.product.vendor.device" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+        echo "BRANCH=$(grep "ro.vendor.build.id" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+
+    - name: Create Gitlab Repository
+      run: |
+        cd workspace
+        curl --header "PRIVATE-TOKEN: ${{ secrets.GITLAB_TOKEN }}" -X POST "https://gitlab.com/api/v4/projects?name=android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}&visibility=public" > repo.json
+        echo "USERNAME=$(cat repo.json | grep -o '"username":"[^"]*' | cut -d'"' -f4)" >> $GITHUB_ENV
+        cat repo.json
+
+    - name: Push as Repository
+      run: |
+        cd workspace/dumprx/out
+        rm -rf .git
+        rm -rf .gitignore
+        rm -rf .gitattributes
+        DUMP_DIR_LIST=$(find -type d -not -empty -printf "%P\n" | grep -v / | grep -v .git)
+        git init
+        git lfs install
+        find . \( -name "*sensetime*" -o -name "*.lic" \) | cut -d'/' -f'2-' >| .gitignore
+        git branch -M ${{ env.BRANCH }}
+        git config --global user.name "Carlo Dandan"
+        git config --global user.email "carlodandan.personal@proton.me"
+        git remote add origin https://${{ secrets.GITLAB_TOKEN_NAME }}:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.USERNAME }}/android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}.git
+        find . -type f -size +100M -exec git lfs track {} \;
+        if [ -f .gitattributes ]; then
+            git add .gitattributes
+            git commit -s -m "Setup Git LFS"
+            git push -u origin ${{ env.BRANCH }}
+        fi
+        for dir in ${DUMP_DIR_LIST}; do
+            git add ${dir}
+            git commit -s -m "dump: ${dir}: import dump for ${VENDOR_NAME}
+            Firmware: ${{ github.event.inputs.FIRMWARE_LINK }}"
+            git push -u origin ${{ env.BRANCH }}
+        done
+        git add .
+        git commit -s -m "dump: import remaining dump for ${VENDOR_NAME}
+        Firmware: ${{ github.event.inputs.FIRMWARE_LINK }}"
+        git push -u origin ${{ env.BRANCH }}
