@@ -32,13 +32,8 @@ jobs:
         mkdir -p workspace && cd workspace
         git clone --depth=1 https://github.com/DumprX/DumprX.git ./dumprx
         cd dumprx && bash setup.sh
-        sudo apt update
-          DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
-            attr ccache clang ffmpeg golang \
-            libbrotli-dev libgtest-dev libprotobuf-dev libunwind-dev libpcre2-dev \
-            libzstd-dev linux-modules-extra-$(uname -r) lld protobuf-compiler webp
-            sudo apt install f2fs-tools
-           modprobe f2fs
+        sudo apt install f2fs-tools
+        modprobe f2fs
            
     - name: Dump Firmware
       run: |
