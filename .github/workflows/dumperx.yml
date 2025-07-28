@@ -32,8 +32,8 @@ jobs:
         mkdir -p workspace && cd workspace
         git clone --depth=1 https://github.com/DumprX/DumprX.git ./dumprx
         cd dumprx && bash setup.sh
-        sudo apt install f2fs-tools
-        modprobe f2fs
+        sudo apt install erofs-utils
+        modprobe erofs
            
     - name: Dump Firmware
       run: |
